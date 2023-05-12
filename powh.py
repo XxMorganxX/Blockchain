@@ -18,36 +18,47 @@ wallet_PKs = [
 
 
 class powHistoryBlock(powBlock):
-    def assignNonceRanges(self, pool_wallets):
+    def assignNonceRanges(self, pool_wallets, rangePerWallet):
         nonceRangePerWallet = {}
         endOfRange = 0
         finalIndex = 0
+        
 
         for i, wallet in enumerate(list(pool_wallets)):
-            endOfRange = self.nonce+((i+1)*50)
+            endOfRange = self.nonce+((i+1)*rangePerWallet)
             finalIndex = i
-            nonceRangePerWallet[wallet] = (self.nonce+(i*50), (self.nonce+((i+1)*50)))
-        self.nonce = (self.nonce+((i)*50))
+            nonceRangePerWallet[wallet] = (self.nonce+(i*rangePerWallet), (self.nonce+((i+1)*rangePerWallet)))
+        self.nonce = (self.nonce+((i)*rangePerWallet))
 
         return nonceRangePerWallet, endOfRange
 
     def mine_work(self, pool_wallets):
-        nonceRangePerWallet, endOfRange = self.assignNonceRanges(pool_wallets)
-    
+        numberOfWallets = len(list(pool_wallets))
+        print(list(pool_wallets))
+        rangePerWallet = 500
+        nonceRangePerWallet, endOfRange = self.assignNonceRanges(pool_wallets, rangePerWallet)
+
+        #Ideally this portion of the code would be threaded and each wallet would indiviually provide their own work simultaneously
         while not(self.check_correct_hash()):
             self.nonce += 1
             blockInfo = self.getWorkEncodedBlockInfo()
             updateHash = self.hash(blockInfo)
             self.blockHash = updateHash
             if self.nonce > endOfRange:
-                nonceRangePerWallet, endOfRange = self.assignNonceRanges(pool_wallets)
-            
+                nonceRangePerWallet, endOfRange = self.assignNonceRanges(pool_wallets, rangePerWallet)
+        self.timestamp = datetime.now()
+
+        self.workPerformed = (self.nonce // (numberOfWallets)) + (self.nonce % rangePerWallet)
+        #print(workPerformed)
+
         for wallet, (start, stop) in nonceRangePerWallet.items():
             if self.nonce > start and self.nonce < stop:
-                print(f"successful wallet {wallet}")
+                print(f"Successful Wallet: {wallet}")
+                return wallet#, workPerformed
+                
 
 
-        self.timestamp = datetime.now()
+        
 
     def mine_trust(self):
         raise NotImplementedError("No Code")
@@ -70,7 +81,9 @@ class hashPool():
         self.pools = {}
         self.minimumTrust = HASHPOOL_MINIMUM_TRUST
         self.chainObject = chainObject
-        
+    
+    def getPool(self, chain_index, pool_index):
+        return self.pools[chain_index][pool_index]
 
     def create_hashPool(self, chainIndex, pool_index):
         if chainIndex not in self.pools:
@@ -85,15 +98,13 @@ class hashPool():
         walletTrust = self.chainObject.walletTrustScores[chainIndex][wallet]
 
         if chainIndex in self.pools and pool_index in self.pools[chainIndex]:
-                if wallet in self.pools[chainIndex][pool_index]:
-                    print(f"{wallet[:3]}...{wallet[-3:]} already in pool {pool_index}")
-                else:
-                    if walletTrust >= self.minimumTrust:
-                        self.pools[chainIndex][pool_index][wallet] = INITIAL_HASHPOOL_TRUST
+            if wallet in self.pools[chainIndex][pool_index]:
+                print(f"{wallet[:3]}...{wallet[-3:]} already in pool {pool_index}")
+            else:
+                if walletTrust >= self.minimumTrust:
+                    self.pools[chainIndex][pool_index][wallet] = INITIAL_HASHPOOL_TRUST
         
         
-
-
 class powHistoryChain(bc.Blockchain):
     def __init__(self):
         super().__init__()
@@ -118,7 +129,11 @@ class powHistoryChain(bc.Blockchain):
 
         previous_hash = (self.chains[chain_index][-1]).blockHash if index > 0 else "0x00"
         newBlock = powHistoryBlock(index, tx, previous_hash)
-        newBlock.mine_work(self.walletTrustScores[chain_index])
+        successfullWallet = newBlock.mine_work(self.walletTrustScores[chain_index])
+
+        self.improveWalletTrust(chain_index, successfullWallet, newBlock)
+        
+        print(self.walletTrustScores[chain_index])
 
         updatedChain = self.chains[chain_index] + [newBlock]
         
@@ -126,17 +141,31 @@ class powHistoryChain(bc.Blockchain):
         print(newBlock)
 
 
+    def improveWalletTrust(self, chain_index, wallet, block):
+        workDoneByWallet = block.workPerformed
+        workDoneTotal = block.nonce
+
+        workPercentage = (workDoneByWallet / workDoneTotal)
+        currentTrust = self.walletTrustScores[chain_index][wallet]
+        self.walletTrustScores[chain_index][wallet] += (currentTrust*workPercentage) * .3
+
+
+
 chainIndex = 0 
 poolIndex = 11337
+
 
 chains = powHistoryChain()
 chains.initializeWalletScores(chainIndex, wallet_PKs)
 
 
-
 chains.onChainPoolManager.create_hashPool(chainIndex, poolIndex)
 chains.onChainPoolManager.join_hashPool(chainIndex, poolIndex, wallet_PKs[0])
 chains.create_block(chainIndex, "john -> jason: 2")
+chains.create_block(chainIndex, "john -> jason: 4")
+chains.create_block(chainIndex, "john -> jason: 1")
+chains.create_block(chainIndex, "john -> jason: 3")
+chains.create_block(chainIndex, "john -> jason: 9")
 #print(chains.walletTrustScores[chainIndex])
 print(chains.onChainPoolManager.pools)
 
